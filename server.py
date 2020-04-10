@@ -7,34 +7,47 @@ INITIAL_STATE = [3, 5, 7, 9, 11, 13, 11, 9, 7, 5, 3]
 
 class State(NamedTuple):
   # Is it the first player's turn?
-  first_player: bool
+  first_player: bool = True
   # The dice this player can use this turn.
-  dice: Tuple[int, int, int, int]  # offset 0
+  dice: Tuple[int, int, int, int] = (0, 0, 0, 0)  # offset 0
   # The current player's committed board position.
-  player1: List[int] = [0] * 11  # offset 5
+  player1: List[int] = INITIAL_STATE  # offset 5
   # The current player's black token positions.
   uncommitted: Dict[int, int] = {}  # offset 17
   # The opponent's board position.
-  player2: List[int] = [0] * 11  # offset 24
+  player2: List[int] = INITIAL_STATE  # offset 24
   # The last move. The first two are the track(s) taken, the last is
   # S for stop, C for a successful continue, and ! for bust.
-  last_move: Optional[Tuple[int, int, str]]
+  last_move: Optional[Tuple[int, int, str]] = (0, 0, '!') # offset 36
 
   def serialize(self) -> str:
-    return '{dice} {player1} {uncommitted:-<6} {opponent}'.format(
+    return '{dice} {player1} {uncommitted:-<6} {player2} {last_move}'.format(
         dice=''.join(map(str, self.dice)),
         player1=''.join(map(str, self.player1)),
         uncommitted=''.join('%s%s' % i for i in self.uncommitted.items()),
-        player2=''.join(map(str, self.player2)))
+        player2=''.join(map(str, self.player2)),
+        last_move='%x%x%s' % self.last_move)
 
   @staticmethod
-  def new(first_player = True, dice = None, player1 = INITIAL_STATE, uncommitted = {}, player2 = INITIAL_STATE, last_move = None) -> State:
-    if not dice: dice = roll_dice()
-    return State(dice=roll
+  def new(first_player=True,
+          dice=None,
+          player1=INITIAL_STATE,
+          uncommitted={},
+          player2=INITIAL_STATE,
+          last_move=None):
+    if not dice:
+      dice = roll_dice()
+    return State(first_player=first_player,
+                 dice=dice,
+                 player1=player1,
+                 uncommitted=uncommitted,
+                 player2=player2,
+                 last_move=last_move)
+
   @staticmethod
-  def deserialize(msg: str) -> State:
+  def deserialize(msg: str):
     msg = msg.strip()
-    assert len(msg) == (4 + 1 + 11 + 1 + 6 + 1 + 11)
+    assert len(msg) == (4 + 1 + 11 + 1 + 6 + 1 + 11 + 1 + 3), (len(msg), msg)
     dice = tuple(map(int, msg[:4]))
     uncommitted = {}
     for a, b in (msg[17:19], msg[19:21], msg[21:23]):
@@ -43,10 +56,12 @@ class State(NamedTuple):
       uncommitted[int(a, 16)] = int(b)
     player1 = list(map(int, msg[5:5 + 11]))
     player2 = list(map(int, msg[24:24 + 11]))
+    last_move = (int(msg[36], 16), int(msg[37], 16), msg[38])
     s = State(dice=dice,
               player1=player1,
               uncommitted=uncommitted,
-              player2=player2)
+              player2=player2,
+              last_move=last_move)
     print("new state=", s)
     return s
 
@@ -58,8 +73,48 @@ class State(NamedTuple):
             not all(2 <= t <= 12 and 0 <= v <= INITIAL_STATE[t - 2]
                     for t, v in self.uncommitted))
 
-  def valid_moves(self) -> Set[Tuple[int, int]]:
-    pass
+  def active_player_state(self):
+    return self.player1 if self.first_player else self.player2
+
+  def valid_moves(self, dice=None) -> Set[Tuple[int, int]]:
+    dice = dice or self.dice
+    all_moves = [(dice[0] + dice[1], dice[2] + dice[3]),
+                 (dice[0] + dice[2], dice[1] + dice[3]),
+                 (dice[0] + dice[3], dice[1] + dice[2])]
+    available_tracks = set(i + 2
+                           for i in range(11)
+                           if self.player1[i] > 0 and self.player2[i] > 0 and
+                           uncommitted.get(i + 2, 1) > 0)
+    black_tokens = set(self.uncommitted.keys())
+    valid_moves = set()
+    for m1, m2 in all_moves:
+      if m1 not in available_tracks:
+        m1 = 0
+      if m2 not in available_tracks:
+        m2 = 0
+      if len(black_tokens) >= 3:
+        if m1 not in black_tokens:
+          m1 = 0
+        if m2 not in black_tokens:
+          m2 = 0
+      if m1 == 0 and m2 == 0:
+        continue
+      # Both tracks are different and have not been advanced this turn, but we
+      # only have one black token left. Generate two possible moves for this
+      # case.
+      elif (len(black_tokens) == 2 and m1 != m2 and m1 != 0 and m2 != 0 and
+            m1 not in black and m2 not in black_tokens):
+        valid_moves.insert((0, m1))
+        valid_moves.insert((0, m2))
+      # Both tracks are the same but there's only advancement left. Allow one
+      # advancement in this case.
+      elif (m1 == m2 and
+            uncommitted.get(m1,
+                            self.active_player_state()[m1 - 2]) == 1):
+        valid_moves.insert((0, m1))
+      else:
+        valid_moves.insert((m1, m2) if m1 < m2 else (m2, m1))
+    return valid_moves
 
   def move_checked(self, d1: int, d2: int, stop: bool):
     # Check if d1, d2 is a valid move.
@@ -100,8 +155,8 @@ class State(NamedTuple):
 
 def test_server():
   test_strings = [
-      '1111 01234567890 123456 01234567890',
-      '1234 00000000000 ------ 00000000000'
+      '1111 01234567890 123456 01234567890 ab!',
+      '1234 00000000000 ------ 00000000000 91S'
   ]
 
   for case in test_strings:
