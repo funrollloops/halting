@@ -24,7 +24,7 @@ class State(NamedTuple):
     return '{dice} {player1} {uncommitted:-<6} {player2} {last_move} {valid_moves}'.format(
         dice=''.join(map(str, self.dice)),
         player1=''.join('%x' % x for x in self.player1),
-        uncommitted=''.join('%s%s' % i for i in self.uncommitted.items()),
+        uncommitted=''.join('%x%x' % i for i in self.uncommitted.items()),
         player2=''.join('%x' % x for x in self.player2),
         last_move='%x%x%s' % self.last_move,
         valid_moves='|'.join("%x%x" % m for m in sorted(self.valid_moves())))
@@ -54,7 +54,7 @@ class State(NamedTuple):
     for a, b in (msg[17:19], msg[19:21], msg[21:23]):
       if a == '-' or b == '-':
         continue
-      uncommitted[int(a, 16)] = int(b)
+      uncommitted[int(a, 16)] = int(b, 16)
     player1 = list(int(x, 16) for x in msg[5:5 + 11])
     player2 = list(int(x, 16) for x in msg[24:24 + 11])
     last_move = (int(msg[36], 16), int(msg[37], 16), msg[38])
@@ -104,7 +104,7 @@ class State(NamedTuple):
       # only have one black token left. Generate two possible moves for this
       # case.
       elif (len(black_tokens) == 2 and m1 != m2 and m1 != 0 and m2 != 0 and
-            m1 not in black and m2 not in black_tokens):
+            m1 not in black_tokens and m2 not in black_tokens):
         valid_moves.add((0, m1))
         valid_moves.add((0, m2))
       # Both tracks are the same but there's only advancement left. Allow one
@@ -159,13 +159,15 @@ def test_server():
       '1112 01234567890 123456 01234567890 ab! 03',
       '1234 3579bdb9753 ------ 3579bdb9753 91S 37|46|55',
       '1234 11111111111 ------ 11111111111 91S 05|37|46',
+      '1234 11111111111 406030 11111111111 91S ',
+      '1234 3579bdb9753 6ac2-- 3579bdb9753 a1S 03|07|46|55',
   ]
 
   for case in test_strings:
     print("case: <%s>" % case)
     reserialized = State.deserialize(case).serialize()
     print("  <>: <%s>" % reserialized)
-    assert reserialized[:len(case)] == case
+    assert reserialized == case
 
 
 if __name__ == "__main__":
