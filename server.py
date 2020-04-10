@@ -5,8 +5,10 @@ from typing import NamedTuple, Tuple, List, Dict, Set, Optional
 
 INITIAL_STATE = [3, 5, 7, 9, 11, 13, 11, 9, 7, 5, 3]
 
+
 class IllegalMoveException(Exception):
   pass
+
 
 def roll_dice():
   return tuple(sorted((randint(1, 6) for _ in range(4))))
@@ -14,21 +16,22 @@ def roll_dice():
 
 class State(NamedTuple):
   # Is it the first player's turn?
-  first_player: bool = True
+  first_player: bool = True  # offset 0
   # The dice this player can use this turn.
-  dice: Tuple[int, int, int, int] = (0, 0, 0, 0)  # offset 0
+  dice: Tuple[int, int, int, int] = (0, 0, 0, 0)  # offset 2
   # The current player's committed board position.
-  player1: List[int] = INITIAL_STATE  # offset 5
+  player1: List[int] = INITIAL_STATE  # offset 7
   # The current player's black token positions.
-  uncommitted: Dict[int, int] = {}  # offset 17
+  uncommitted: Dict[int, int] = {}  # offset 19
   # The opponent's board position.
-  player2: List[int] = INITIAL_STATE  # offset 24
+  player2: List[int] = INITIAL_STATE  # offset 26
   # The last move. The first two are the track(s) taken, the last is
   # S for stop, C for a successful continue, and ! for bust.
-  last_move: Optional[Tuple[int, int, str]] = (0, 0, '!')  # offset 36
+  last_move: Optional[Tuple[int, int, str]] = (0, 0, '!')  # offset 38
 
   def serialize(self) -> str:
-    return '{dice} {player1} {uncommitted:-<6} {player2} {last_move} {valid_moves}'.format(
+    return '{player} {dice} {player1} {uncommitted:-<6} {player2} {last_move} {valid_moves}'.format(
+        player=1 if self.first_player else 2,
         dice=''.join(map(str, self.dice)),
         player1=''.join('%x' % x for x in self.player1),
         uncommitted=''.join('%x%x' % i for i in self.uncommitted.items()),
@@ -37,34 +40,19 @@ class State(NamedTuple):
         valid_moves='|'.join("%x%x" % m for m in sorted(self.valid_moves())))
 
   @staticmethod
-  def new(first_player=True,
-          dice=None,
-          player1=INITIAL_STATE,
-          uncommitted={},
-          player2=INITIAL_STATE,
-          last_move=None):
-    if not dice:
-      dice = roll_dice()
-    return State(first_player=first_player,
-                 dice=dice,
-                 player1=player1,
-                 uncommitted=uncommitted,
-                 player2=player2,
-                 last_move=last_move)
-
-  @staticmethod
   def deserialize(msg: str):
     msg = msg.strip()
     assert len(msg) >= (4 + 1 + 11 + 1 + 6 + 1 + 11 + 1 + 3), (len(msg), msg)
-    dice = tuple(map(int, msg[:4]))
+    first_player = msg[0] == '1'
+    dice = tuple(map(int, msg[2:2+4]))
     uncommitted = {}
-    for a, b in (msg[17:19], msg[19:21], msg[21:23]):
+    for a, b in (msg[19:21], msg[21:23], msg[23:25]):
       if a == '-' or b == '-':
         continue
       uncommitted[int(a, 16)] = int(b, 16)
-    player1 = list(int(x, 16) for x in msg[5:5 + 11])
-    player2 = list(int(x, 16) for x in msg[24:24 + 11])
-    last_move = (int(msg[36], 16), int(msg[37], 16), msg[38])
+    player1 = list(int(x, 16) for x in msg[7:7 + 11])
+    player2 = list(int(x, 16) for x in msg[26:26 + 11])
+    last_move = (int(msg[38], 16), int(msg[39], 16), msg[40])
     s = State(dice=dice,
               player1=player1,
               uncommitted=uncommitted,
@@ -129,7 +117,8 @@ class State(NamedTuple):
     moves = tuple(
         sorted((d1 if 2 <= d1 <= 12 else 0, d2 if 2 <= d2 <= 12 else 0)))
     if moves not in valid_moves:
-      raise IllegalMoveException('invalid move %s for dice %s' % (moves, self.dice))
+      raise IllegalMoveException('invalid move %s for dice %s' %
+                                 (moves, self.dice))
     # State variables.
     first_player = self.first_player
     player1 = self.player1[:]
@@ -141,34 +130,51 @@ class State(NamedTuple):
       if not (2 <= move <= 12):
         continue
       uncommitted[move] = uncommitted.get(move, my_state[move - 2]) - 1
+
+    dice = roll_dice()
+    def make_state(last_result):
+      return State(first_player=first_player,
+                   dice=dice,
+                   player1=player1,
+                   player2=player2,
+                   uncommitted=uncommitted,
+                   last_move=(d1, d2, last_result))
+
     # If player chose to stop, commit.
     if stop:
       first_player = not first_player
       for t, v in uncommitted.items():
-        my_state[t] = v
+        my_state[t - 2] = v
       uncommitted = {}
+      next_state = make_state('S')
+    else:
+      next_state = make_state('C')
 
-    next_state = State(first_player=first_player,
-                       dice=roll_dice(),
-                       player1=player1,
-                       player2=player2,
-                       uncommitted=uncommitted,
-                       last_move=(d1, d2, 'S' if stop else 'C'))
-
-    if not next_state.isvalid():
-      raise IllegalMoveException("Move %s resulted in invalid state %s" %
-                      ((d1, d2, stop), next_state))
+    consecutive_busts = 0
+    while len(next_state.valid_moves()) == 0:
+      print("no valid moves for", next_state.serialize())
+      dice = roll_dice()
+      first_player = not first_player
+      uncommitted = {}
+      if consecutive_busts > 0:
+        d1, d2 = 0, 0
+      consecutive_busts += 1
+      assert consecutive_busts < 5
+      next_state = make_state('!')
+    assert next_state.isvalid(), (
+        "valid move %s from %s resulted in invalid state %s" %
+        ((d1, d2, stop), self.serialize(), next_state.serialize()))
     return next_state
 
 
 def test_serialize_deserialize():
   test_strings = [
-      '1112 01234567890 123456 01234567890 ab! 03',
-      '1234 3579bdb9753 ------ 3579bdb9753 91S 37|46|55',
-      '1234 11111111111 ------ 11111111111 91S 05|37|46',
-      '1234 11111111111 406030 11111111111 91S ',
-      '1234 3579bdb9753 6ac2-- 3579bdb9753 a1S 03|07|46|55',
-      '3456 3579bdb9753 ------ 3579bdb9753 a1S 7b|8a|99',
+      '1 1112 01234567890 123456 01234567890 ab! 03',
+      '1 1234 3579bdb9753 ------ 3579bdb9753 91S 37|46|55',
+      '1 1234 11111111111 ------ 11111111111 91S 05|37|46',
+      '1 1234 11111111111 406030 11111111111 91S ',
+      '1 1234 3579bdb9753 6ac2-- 3579bdb9753 a1S 03|07|46|55',
+      '1 3456 3579bdb9753 ------ 3579bdb9753 a1S 7b|8a|99',
   ]
 
   for case in test_strings:
@@ -177,12 +183,17 @@ def test_serialize_deserialize():
     print("  <>: <%s>" % reserialized)
     assert reserialized == case
 
+
 def test_moves():
+  global roll_dice
+  roll_dice = lambda: (6, 5, 4, 3)
   test_cases = [
-      # Take valid move and continue.
-      ('1112 01234567890 123456 01234567890 00! 03',
-        (0, 3, False),
-       '01234567890 123356 01234567890 03C',)
+      # Take valid move and stop.
+      ('1 1112 01234567890 b850-- 01234567890 00! 03', (0, 3, True),
+       '2 6543 00204567880 ------ 01234567890 03S'),
+      # Take a valid move and bust.
+      ('1 1112 01234567890 4152-- 11234567890 00! 03', (0, 3, False),
+       '2 6543 01234567890 ------ 11234567890 03!'),
       #'1234 3579bdb9753 ------ 3579bdb9753 91S 37|46|55',
       #'1234 11111111111 ------ 11111111111 91S 05|37|46',
       #'1234 11111111111 406030 11111111111 91S ',
@@ -194,16 +205,16 @@ def test_moves():
     print("initial:", initial)
     initial_parsed = State.deserialize(initial)
     assert initial_parsed.serialize()[:len(initial)] == initial, \
-        initial_parsed.serialize()
+        "initial not idempotent?\n input: %s\noutput: %s" % (initial, initial_parsed.serialize())
     print('move:', move)
     try:
       actual = initial_parsed.move_checked(*move)
       print('expected:', expected)
-      assert actual.serialize()[5:len(expected)+5] == expected, \
-          "\nexpected: ???? %s\n  actual: %s" % (expected, actual.serialize())
+      assert actual.serialize()[:len(expected)] == expected, \
+          "\n initial: %s\nexpected: ???? %s\n  actual: %s" % (
+              initial, expected, actual.serialize())
     except IllegalMoveException as e:
       assert expected == False, "unexpected failure during move %s" % e
-
 
 
 if __name__ == "__main__":
