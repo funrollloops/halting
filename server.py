@@ -18,15 +18,16 @@ class State(NamedTuple):
   player2: List[int] = INITIAL_STATE  # offset 24
   # The last move. The first two are the track(s) taken, the last is
   # S for stop, C for a successful continue, and ! for bust.
-  last_move: Optional[Tuple[int, int, str]] = (0, 0, '!') # offset 36
+  last_move: Optional[Tuple[int, int, str]] = (0, 0, '!')  # offset 36
 
   def serialize(self) -> str:
-    return '{dice} {player1} {uncommitted:-<6} {player2} {last_move}'.format(
+    return '{dice} {player1} {uncommitted:-<6} {player2} {last_move} {valid_moves}'.format(
         dice=''.join(map(str, self.dice)),
-        player1=''.join(map(str, self.player1)),
+        player1=''.join('%x' % x for x in self.player1),
         uncommitted=''.join('%s%s' % i for i in self.uncommitted.items()),
-        player2=''.join(map(str, self.player2)),
-        last_move='%x%x%s' % self.last_move)
+        player2=''.join('%x' % x for x in self.player2),
+        last_move='%x%x%s' % self.last_move,
+        valid_moves='|'.join("%x%x" % m for m in sorted(self.valid_moves())))
 
   @staticmethod
   def new(first_player=True,
@@ -47,15 +48,15 @@ class State(NamedTuple):
   @staticmethod
   def deserialize(msg: str):
     msg = msg.strip()
-    assert len(msg) == (4 + 1 + 11 + 1 + 6 + 1 + 11 + 1 + 3), (len(msg), msg)
+    assert len(msg) >= (4 + 1 + 11 + 1 + 6 + 1 + 11 + 1 + 3), (len(msg), msg)
     dice = tuple(map(int, msg[:4]))
     uncommitted = {}
     for a, b in (msg[17:19], msg[19:21], msg[21:23]):
       if a == '-' or b == '-':
         continue
       uncommitted[int(a, 16)] = int(b)
-    player1 = list(map(int, msg[5:5 + 11]))
-    player2 = list(map(int, msg[24:24 + 11]))
+    player1 = list(int(x, 16) for x in msg[5:5 + 11])
+    player2 = list(int(x, 16) for x in msg[24:24 + 11])
     last_move = (int(msg[36], 16), int(msg[37], 16), msg[38])
     s = State(dice=dice,
               player1=player1,
@@ -84,7 +85,7 @@ class State(NamedTuple):
     available_tracks = set(i + 2
                            for i in range(11)
                            if self.player1[i] > 0 and self.player2[i] > 0 and
-                           uncommitted.get(i + 2, 1) > 0)
+                           self.uncommitted.get(i + 2, 1) > 0)
     black_tokens = set(self.uncommitted.keys())
     valid_moves = set()
     for m1, m2 in all_moves:
@@ -104,16 +105,16 @@ class State(NamedTuple):
       # case.
       elif (len(black_tokens) == 2 and m1 != m2 and m1 != 0 and m2 != 0 and
             m1 not in black and m2 not in black_tokens):
-        valid_moves.insert((0, m1))
-        valid_moves.insert((0, m2))
+        valid_moves.add((0, m1))
+        valid_moves.add((0, m2))
       # Both tracks are the same but there's only advancement left. Allow one
       # advancement in this case.
       elif (m1 == m2 and
-            uncommitted.get(m1,
-                            self.active_player_state()[m1 - 2]) == 1):
-        valid_moves.insert((0, m1))
+            self.uncommitted.get(m1,
+                                 self.active_player_state()[m1 - 2]) == 1):
+        valid_moves.add((0, m1))
       else:
-        valid_moves.insert((m1, m2) if m1 < m2 else (m2, m1))
+        valid_moves.add((m1, m2) if m1 < m2 else (m2, m1))
     return valid_moves
 
   def move_checked(self, d1: int, d2: int, stop: bool):
@@ -155,13 +156,16 @@ class State(NamedTuple):
 
 def test_server():
   test_strings = [
-      '1111 01234567890 123456 01234567890 ab!',
-      '1234 00000000000 ------ 00000000000 91S'
+      '1112 01234567890 123456 01234567890 ab! 03',
+      '1234 3579bdb9753 ------ 3579bdb9753 91S 37|46|55',
+      '1234 11111111111 ------ 11111111111 91S 05|37|46',
   ]
 
   for case in test_strings:
     print("case: <%s>" % case)
-    assert State.deserialize(case).serialize() == case
+    reserialized = State.deserialize(case).serialize()
+    print("  <>: <%s>" % reserialized)
+    assert reserialized[:len(case)] == case
 
 
 if __name__ == "__main__":
