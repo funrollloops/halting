@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 
+from random import randint
 from typing import NamedTuple, Tuple, List, Dict, Set, Optional
 
 INITIAL_STATE = [3, 5, 7, 9, 11, 13, 11, 9, 7, 5, 3]
+
+class IllegalMoveException(Exception):
+  pass
+
+def roll_dice():
+  return tuple(sorted((randint(1, 6) for _ in range(4))))
 
 
 class State(NamedTuple):
@@ -63,7 +70,6 @@ class State(NamedTuple):
               uncommitted=uncommitted,
               player2=player2,
               last_move=last_move)
-    print("new state=", s)
     return s
 
   def isvalid(self) -> bool:
@@ -121,9 +127,9 @@ class State(NamedTuple):
     # Check if d1, d2 is a valid move.
     valid_moves = self.valid_moves()
     moves = tuple(
-        sorted((d1 if 2 <= d1 <= 12 else 0, d2 if 2 <= d1 <= 12 else 0)))
+        sorted((d1 if 2 <= d1 <= 12 else 0, d2 if 2 <= d2 <= 12 else 0)))
     if moves not in valid_moves:
-      raise Exception('invalid move %s for dice %s' % (moves, self.dice))
+      raise IllegalMoveException('invalid move %s for dice %s' % (moves, self.dice))
     # State variables.
     first_player = self.first_player
     player1 = self.player1[:]
@@ -149,12 +155,13 @@ class State(NamedTuple):
                        uncommitted=uncommitted,
                        last_move=(d1, d2, 'S' if stop else 'C'))
 
-    if not next_state.is_valid():
-      raise Exception("Move %s resulted in invalid state %s" %
+    if not next_state.isvalid():
+      raise IllegalMoveException("Move %s resulted in invalid state %s" %
                       ((d1, d2, stop), next_state))
+    return next_state
 
 
-def test_server():
+def test_serialize_deserialize():
   test_strings = [
       '1112 01234567890 123456 01234567890 ab! 03',
       '1234 3579bdb9753 ------ 3579bdb9753 91S 37|46|55',
@@ -170,6 +177,35 @@ def test_server():
     print("  <>: <%s>" % reserialized)
     assert reserialized == case
 
+def test_moves():
+  test_cases = [
+      # Take valid move and continue.
+      ('1112 01234567890 123456 01234567890 00! 03',
+        (0, 3, False),
+       '01234567890 123356 01234567890 03C',)
+      #'1234 3579bdb9753 ------ 3579bdb9753 91S 37|46|55',
+      #'1234 11111111111 ------ 11111111111 91S 05|37|46',
+      #'1234 11111111111 406030 11111111111 91S ',
+      #'1234 3579bdb9753 6ac2-- 3579bdb9753 a1S 03|07|46|55',
+      #'3456 3579bdb9753 ------ 3579bdb9753 a1S 7b|8a|99',
+  ]
+  for initial, move, expected in test_cases:
+    print("==")
+    print("initial:", initial)
+    initial_parsed = State.deserialize(initial)
+    assert initial_parsed.serialize()[:len(initial)] == initial, \
+        initial_parsed.serialize()
+    print('move:', move)
+    try:
+      actual = initial_parsed.move_checked(*move)
+      print('expected:', expected)
+      assert actual.serialize()[5:len(expected)+5] == expected, \
+          "\nexpected: ???? %s\n  actual: %s" % (expected, actual.serialize())
+    except IllegalMoveException as e:
+      assert expected == False, "unexpected failure during move %s" % e
+
+
 
 if __name__ == "__main__":
-  test_server()
+  test_serialize_deserialize()
+  test_moves()
