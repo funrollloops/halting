@@ -10,8 +10,10 @@ def main():
       break
 
     state = State.deserialize(line.strip())
+    # Randomly choose a move
     move = random.sample(state.valid_moves(), 1)
-    stop = random.choice((True, True, False))
+    # Randomly decide to stop or continue
+    stop = random.choice((True, False))
 
     print('%x%x%s' % (move[0] + ('S' if stop else 'C',)))
     sys.stdout.flush()

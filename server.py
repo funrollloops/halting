@@ -55,7 +55,7 @@ class Game:
     while True:
       line = player.proc.stdout.readline()
       if line:
-        print(line)
+        print(line.decode('utf-8'))
         player.q.put(line.decode('utf-8'))
 
   def run(self):
@@ -208,9 +208,9 @@ class State(NamedTuple):
     moves = tuple(
         sorted((d1 if 2 <= d1 <= 12 else 0, d2 if 2 <= d2 <= 12 else 0)))
     if moves not in valid_moves:
-      print ('valid moves were: %s' % valid_moves)
-      raise IllegalMoveException('invalid move %s for dice %s' %
-                                 (moves, self.dice))
+      raise IllegalMoveException(
+        'invalid move %s for dice %s, valid moves are: %s' %
+        (moves, self.dice, valid_moves))
     # State variables.
     first_player = self.first_player
     player1 = self.player1[:]
