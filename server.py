@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 
+import queue
+import re
 from random import randint
+import sys
+import subprocess
+import threading
 from typing import NamedTuple, Tuple, List, Dict, Set, Optional
 
 INITIAL_STATE = [3, 5, 7, 9, 11, 13, 11, 9, 7, 5, 3]
@@ -9,10 +14,86 @@ INITIAL_STATE = [3, 5, 7, 9, 11, 13, 11, 9, 7, 5, 3]
 class IllegalMoveException(Exception):
   pass
 
+class IllegalPlayerActionException(Exception):
+  pass
+
 
 def roll_dice():
   return tuple(sorted((randint(1, 6) for _ in range(4))))
 
+class Player(NamedTuple):
+  # The subprocess to communicate with the player on.
+  proc: subprocess.Popen
+  # The queue to receive the player program output on.
+  q: queue.Queue
+
+class Game:
+  RE_PLAYER_MOVE = re.compile(r'([0-9a-c])([0-9a-c])([SC])')
+
+  def __init__(self, player_1_cmd: str, player_2_cmd: str):
+    self.state = State()
+
+    player1_queue = queue.Queue()
+    player1_proc = subprocess.Popen(
+      player_1_cmd.split(' '), stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    self.player1 = Player(proc=player1_proc, q=player1_queue)
+    t = threading.Thread(target=self.output_reader,
+                         args=(self.player1,))
+    t.daemon = True
+    t.start()
+
+    player2_queue = queue.Queue()
+    player2_proc = subprocess.Popen(
+      player_2_cmd.split(' '), stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    self.player2 = Player(proc=player2_proc, q=player2_queue)
+    t2 = threading.Thread(target=self.output_reader,
+                          args=(self.player2,))
+    t2.daemon = True
+    t2.start()
+
+  def output_reader(self, player):
+    while True:
+      line = player.proc.stdout.readline()
+      if line:
+        print(line)
+        player.q.put(line.decode('utf-8'))
+
+  def run(self):
+    self.state = self.state.roll_dice()
+
+    while True:
+      if self.state.first_player:
+        current_player = self.player1
+      else:
+        current_player = self.player2
+
+      send = self.state.serialize()
+      print(send)
+      current_player.proc.stdin.write(send.encode('utf-8') + b'\n')
+      current_player.proc.stdin.flush()
+      line = current_player.q.get()
+
+
+      md = self.RE_PLAYER_MOVE.match(line)
+      if not md:
+        raise IllegalMoveException(line)
+
+      m1 = int(md.group(1), 16)
+      m2 = int(md.group(2), 16)
+      stop = md.group(3) == 'S'
+
+      if not stop and md.group(3) != 'C':
+        raise IllegalMoveException()
+
+      self.state = self.state.move_checked(m1, m2, stop)
+
+      if self.state.is_game_over():
+        break
+
+  def cleanup(self):
+    self.player1.proc.terminate()
+    self.player2.proc.terminate()
+    
 
 class State(NamedTuple):
   # Is it the first player's turn?
@@ -29,9 +110,12 @@ class State(NamedTuple):
   # S for stop, C for a successful continue, and ! for bust.
   last_move: Optional[Tuple[int, int, str]] = (0, 0, '!')  # offset 38
 
-  def serialize(self) -> str:
+  def serialize(self, for_player_1=True) -> str:
+    player = 1 if self.first_player else 2
+    if not for_player_1:
+      player = 2 if player == 1 else 1
     return '{player} {dice} {player1} {uncommitted:-<6} {player2} {last_move} {valid_moves}'.format(
-        player=1 if self.first_player else 2,
+        player=player,
         dice=''.join(map(str, self.dice)),
         player1=''.join('%x' % x for x in self.player1),
         uncommitted=''.join('%x%x' % i for i in self.uncommitted.items()),
@@ -111,12 +195,20 @@ class State(NamedTuple):
         valid_moves.add((m1, m2) if m1 < m2 else (m2, m1))
     return valid_moves
 
+  def roll_dice(self):
+    return State(first_player=self.first_player,
+                 dice=roll_dice(),
+                 player1=self.player1,
+                 player2=self.player2,
+                 uncommitted=self.uncommitted)
+
   def move_checked(self, d1: int, d2: int, stop: bool):
     # Check if d1, d2 is a valid move.
     valid_moves = self.valid_moves()
     moves = tuple(
         sorted((d1 if 2 <= d1 <= 12 else 0, d2 if 2 <= d2 <= 12 else 0)))
     if moves not in valid_moves:
+      print ('valid moves were: %s' % valid_moves)
       raise IllegalMoveException('invalid move %s for dice %s' %
                                  (moves, self.dice))
     # State variables.
@@ -165,3 +257,20 @@ class State(NamedTuple):
         "valid move %s from %s resulted in invalid state %s" %
         ((d1, d2, stop), self.serialize(), next_state.serialize()))
     return next_state
+
+  def is_game_over(self):
+    return self.player1.count(0) >= 3 or self.player2.count(0) >= 3
+
+
+def main(player_1_cmd, player_2_cmd):
+  try:
+    g = Game(player_1_cmd=player_1_cmd, player_2_cmd=player_2_cmd)
+    g.run()
+  finally:
+    g.cleanup()
+
+if __name__ == '__main__':
+  if len(sys.argv) != 3:
+    print('usage: server.py <player 1 cmd> <player 2 cmd>')
+    sys.exit(1)
+  main(sys.argv[1], sys.argv[2])
