@@ -1,6 +1,7 @@
+#!/usr/bin/env python3
 from unittest.mock import patch
 
-from server import State, IllegalMoveException
+from state import State, IllegalMoveException
 
 def test_serialize_deserialize():
   test_strings = [
@@ -18,7 +19,7 @@ def test_serialize_deserialize():
     print("  <>: <%s>" % reserialized)
     assert reserialized == case
 
-@patch('server.roll_dice', lambda: (6, 5, 4, 3))
+@patch('state.roll_dice', lambda: (6, 5, 4, 3))
 def test_moves():
   test_cases = [
       # Take valid move and stop.
