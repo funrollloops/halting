@@ -3,22 +3,13 @@
 import random
 import sys
 
-from server import State
+from player_common import run_player, State, PlayerResponse
 
-def main():
-  while True:
-    line = sys.stdin.readline()
-    if not line:
-      break
-
-    state = State.deserialize(line.strip())
-    # Randomly choose a move
-    move = random.sample(state.valid_moves(), 1)
-    # Randomly decide to stop or continue
-    stop = random.choice((True, False))
-
-    print('%x%x%s' % (move[0] + ('S' if stop else 'C',)))
-    sys.stdout.flush()
+def random_player(state: State) -> PlayerResponse:
+  move = random.sample(state.valid_moves(), 1)[0]
+  # Randomly decide to stop or continue
+  stop = random.choice((True, False))
+  return PlayerResponse(move[0], move[1], stop)
 
 if __name__ == '__main__':
-  main()
+  run_player(random_player)

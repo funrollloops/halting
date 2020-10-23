@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import sys
 from random import randint
 from typing import NamedTuple, Tuple, List, Dict, Set, Optional
 
@@ -15,7 +16,7 @@ class State(NamedTuple):
   # Is it the first player's turn?
   first_player: bool = True  # offset 0
   # The dice this player can use this turn.
-  dice: Tuple[int, int, int, int] = (0, 0, 0, 0)  # offset 2
+  dice: Tuple[int, int, int, int] = roll_dice()  # offset 2
   # The current player's committed board position.
   player1: List[int] = INITIAL_STATE  # offset 7
   # The current player's black token positions.
@@ -53,12 +54,12 @@ class State(NamedTuple):
     player1 = list(int(x, 16) for x in msg[7:7 + 11])
     player2 = list(int(x, 16) for x in msg[26:26 + 11])
     last_move = (int(msg[38], 16), int(msg[39], 16), msg[40])
-    s = State(dice=dice,
-              player1=player1,
-              uncommitted=uncommitted,
-              player2=player2,
-              last_move=last_move)
-    return s
+    return State(first_player,
+                 dice=dice,
+                 player1=player1,
+                 uncommitted=uncommitted,
+                 player2=player2,
+                 last_move=last_move)
 
   def isvalid(self) -> bool:
     return (not all(0 <= a <= m for a, m in zip(self.player1, INITIAL_STATE)) or
@@ -125,19 +126,19 @@ class State(NamedTuple):
         sorted((d1 if 2 <= d1 <= 12 else 0, d2 if 2 <= d2 <= 12 else 0)))
     if moves not in valid_moves:
       raise IllegalMoveException(
-        'invalid move %s for dice %s, valid moves are: %s' %
-        (moves, self.dice, valid_moves))
+          'invalid move %s for dice %s, valid moves are: %s, original (%s, %s, %s)'
+          % (moves, self.dice, valid_moves, d1, d2, stop))
     # State variables.
     first_player = self.first_player
     player1 = self.player1[:]
     player2 = self.player2[:]
-    uncommitted = self.uncommitted
+    uncommitted = self.uncommitted.copy()
     my_state = player1 if first_player else player2
     # Apply moves to uncommitted.
     for move in moves:
       if not (2 <= move <= 12):
         continue
-      uncommitted[move] = uncommitted.get(move, my_state[move - 2]) - 1
+      uncommitted[move] = max(uncommitted.get(move, my_state[move - 2]) - 1, 0)
 
     dice = roll_dice()
     def make_state(last_result):
@@ -150,9 +151,9 @@ class State(NamedTuple):
 
     # If player chose to stop, commit.
     if stop:
-      first_player = not first_player
       for t, v in uncommitted.items():
         my_state[t - 2] = v
+      first_player = not first_player
       uncommitted = {}
       next_state = make_state('S')
     else:
@@ -176,5 +177,3 @@ class State(NamedTuple):
 
   def is_game_over(self):
     return self.player1.count(0) >= 3 or self.player2.count(0) >= 3
-
-
